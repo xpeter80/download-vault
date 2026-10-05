@@ -1,0 +1,117 @@
+{
+    auto_https disable_redirects
+}
+https://h.xpeter.net:6443 {
+    tls /certs/fullchain.cer /certs/h.xpeter.net.key
+    header X-Content-Type-Options nosniff
+    header X-Frame-Options DENY
+    @agentDocument path /agent/ /agent
+    header @agentDocument Cache-Control "no-store"
+
+    # City Atlas is isolated under /city; existing agent/auth routes are unchanged.
+    redir /city /city/ 308
+    handle /city/* {
+        reverse_proxy http://192.168.50.130:3467 {
+            header_up X-Forwarded-Proto https
+        }
+    }
+
+    # Download Vault: backend validates the existing Nova owner session.
+    redir /downloads /downloads/ 308
+    handle_path /downloads/* {
+        request_body {
+            max_size 2MB
+        }
+        reverse_proxy nova-download-vault:8000
+    }
+
+    # HealthBao isolated personal vault service
+    redir /health /health/ 308
+    handle_path /health/* {
+        request_body {
+            max_size 42MB
+        }
+        reverse_proxy jiankangbao:8000
+    }
+
+    redir /photo /photo/ 308
+    redir /agent /agent/ 308
+    redir / /agent/ 302
+
+    handle_path /photo/* {
+        request_body {
+            max_size 5MB
+        }
+        reverse_proxy nova-photos-api:8000
+    }
+    # Existing OAuth callbacks and sessions stay valid during this migration.
+    handle_path /api/auth/* {
+        rewrite * /invest-auth{uri}
+        reverse_proxy https://xpeter.net:3466 {
+            header_up Host xpeter.net:3466
+        }
+    }
+    # The current DSH RPC paths are slash-separated. Only the Nova owner may
+    # read or change model credentials and Host settings, with a real browser
+    # Origin check before the private bridge rewrites the upstream Origin.
+    handle /api/settings/* {
+        route {
+            @badMethod not method POST
+            respond @badMethod 403
+            @badOrigin not header Origin https://h.xpeter.net:6443
+            respond @badOrigin 403
+            request_body {
+                max_size 16KB
+            }
+            forward_auth https://xpeter.net:3466 {
+                uri /invest-auth/verify-owner
+                header_up Host xpeter.net:3466
+            }
+            reverse_proxy nova-invest-auth-bridge:3081 {
+                header_up Host localhost:3080
+                header_up Origin http://localhost:3080
+            }
+        }
+    }
+    handle /api/credentials/* {
+        route {
+            @badMethod not method POST
+            respond @badMethod 403
+            @badOrigin not header Origin https://h.xpeter.net:6443
+            respond @badOrigin 403
+            request_body {
+                max_size 16KB
+            }
+            forward_auth https://xpeter.net:3466 {
+                uri /invest-auth/verify-owner
+                header_up Host xpeter.net:3466
+            }
+            reverse_proxy nova-invest-auth-bridge:3081 {
+                header_up Host localhost:3080
+                header_up Origin http://localhost:3080
+            }
+        }
+    }
+    handle_path /agent/* {
+        forward_auth https://xpeter.net:3466 {
+            uri /invest-auth/verify
+            header_up Host xpeter.net:3466
+        }
+        reverse_proxy nova-invest-auth-bridge:3081 {
+            header_up Host localhost:3080
+            header_up Origin http://localhost:3080
+        }
+    }
+    # NovaAgent uses root-relative plugin/RPC/WebSocket URLs. Keep these behind
+    # the same identity gate; /photo/* is handled independently above.
+    handle {
+        forward_auth https://xpeter.net:3466 {
+            uri /invest-auth/verify
+            header_up Host xpeter.net:3466
+        }
+        reverse_proxy nova-invest-auth-bridge:3081 {
+            header_up Host localhost:3080
+            header_up Origin http://localhost:3080
+        }
+    }
+}

@@ -1,0 +1,8 @@
+[Unit]
+Description=Check Nova maintenance requests
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=5
+Unit=nova-vault-admin.service
+[Install]
+WantedBy=timers.target

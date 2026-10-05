@@ -1,0 +1,15 @@
+[Unit]
+Description=Aria2 resumable NAS downloader
+Wants=network-online.target
+After=network-online.target remote-fs.target
+RequiresMountsFor=/home/nas3/download/nova-vault
+[Service]
+Type=simple
+ExecStart=/usr/bin/aria2c --conf-path=/root/.aria2/aria2.conf --daemon=false
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=120
+LimitNOFILE=51200
+[Install]
+WantedBy=multi-user.target

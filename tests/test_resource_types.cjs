@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict');
+const {resourceType}=require('../app/static/resource-types.js');
+assert.equal(resourceType({url:'https://cdn.test/play?id=4',content_type:'video/mp4; charset=binary'}),'video');
+assert.equal(resourceType({url:'https://cdn.test/fake.mp4',content_type:'audio/mpeg'}),'audio');
+assert.equal(resourceType({url:'https://cdn.test/get?filename=cover%2EJPG&token=x'}),'image');
+assert.equal(resourceType({url:'https://cdn.test/get?next=https://a.test/movie.mp4'}),'other');
+assert.equal(resourceType({url:'https://cdn.test/noext',title:'no extension',kind:'media'}),'other');
+assert.equal(resourceType({url:'https://cdn.test/feed',kind:'hls'}),'video');
+assert.equal(resourceType({url:'magnet:?xt=urn:btih:abc',kind:'magnet',title:'movie.mp4'}),'bt');
+assert.equal(resourceType({url:'https://cdn.test/MUSIC.FLAC?expires=10'}),'audio');
+assert.equal(resourceType({url:'https://cdn.test/a',resolved_url:'https://cdn.test/readme.pdf'}),'document');
+assert.equal(resourceType({url:'https://cdn.test/a.zip?signature=abc'}),'archive');
+assert.equal(resourceType({url:'https://cdn.test/%E0%A4%A'}),'other');
+console.log('11 resource type checks passed');

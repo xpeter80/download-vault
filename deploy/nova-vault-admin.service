@@ -1,0 +1,6 @@
+[Unit]
+Description=Nova vault fixed maintenance requests
+After=aria2.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/nova-vault-admin.py
