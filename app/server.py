@@ -43,12 +43,14 @@ def move_no_replace(src,dst):
         try:os.fsync(fd)
         finally:os.close(fd)
 
-class Vault(Maintenance):
+from acceleration import Acceleration
+
+class Vault(Maintenance,Acceleration):
     def __init__(self,state,storage,host_storage,rpc_url='',rpc_secret='',gateway_key='',origin='',rpc=None,auth_url=''):
         self.problem=Problem
         self.state=Path(state);self.root=Path(storage);self.host_root=Path(host_storage)
         self.state.mkdir(parents=True,exist_ok=True);self.root.mkdir(parents=True,exist_ok=True)
-        self.lock=threading.RLock();self.stop=threading.Event();self.rpc_url=rpc_url;self.rpc_secret=rpc_secret
+        self.acceleration_lock=threading.RLock();self.lock=threading.RLock();self.stop=threading.Event();self.rpc_url=rpc_url;self.rpc_secret=rpc_secret
         self.gateway_key=gateway_key;self.origin=origin;self.rpc_override=rpc;self.last_rpc_error=None
         self.auth_url=auth_url;self.auth_cache={};self.auth_lock=threading.Lock()
         self.db=sqlite3.connect(self.state/'vault.db',check_same_thread=False,isolation_level=None)
@@ -227,7 +229,7 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
                 if restored:
                     r=self.rpc('tellStatus',restored['gid'])
                     self.db.execute('UPDATE tasks SET gid=?,status=?,error=? WHERE id=?',(restored['gid'],r['status'],'',t['id']));return
-            options={'gid':t['gid'],'dir':str(self.host_root/self.dirs[t['zone']]/(t.get('folder') or t['date'])/t['id']),'allow-overwrite':'false','auto-file-renaming':'true','seed-time':'0','check-certificate':'true'}
+            options={'gid':t['gid'],'dir':str(self.host_root/self.dirs[t['zone']]/(t.get('folder') or t['date'])/t['id']),'allow-overwrite':'false','auto-file-renaming':'true','seed-time':self.acceleration_status()['options']['seed-time'],'check-certificate':'true'}
             self.rpc('addUri',[t['url']],options)
             self.db.execute("UPDATE tasks SET status='waiting',error='' WHERE id=?",(t['id'],))
         except Problem as e:self.db.execute("UPDATE tasks SET status='submitting',error=? WHERE id=?",(e.message,t['id']))
@@ -416,7 +418,7 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
             usage=shutil.disk_usage(self.root)
             tasks=self.rows("SELECT id,name,zone,date,status,error,total,completed,speed,tags FROM tasks WHERE source!='import' ORDER BY created_at DESC LIMIT 1000")
             for t in tasks:t['tags']=json.loads(t['tags'] or '[]')
-            return {'files':fs,'tasks':tasks,'tags':[r['name'] for r in self.rows('SELECT name FROM tags ORDER BY name_key')],'batches':batches,'settings':self.dirs,'rpc_error':self.last_rpc_error,'free':usage.free,'managed_size':sum(f['size'] for f in fs),'version':'1.9.0'}
+            return {'files':fs,'tasks':tasks,'tags':[r['name'] for r in self.rows('SELECT name FROM tags ORDER BY name_key')],'batches':batches,'settings':self.dirs,'rpc_error':self.last_rpc_error,'free':usage.free,'managed_size':sum(f['size'] for f in fs),'version':'1.9.1'}
     def worker(self):
         while not self.stop.is_set():
             try:self.discovery.recover();self.run_ops();self.sync()
@@ -467,7 +469,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.command!='GET' and self.headers.get('Origin')!=self.app.origin:raise Problem('请求来源无效，请从正式入口操作',403)
     def dispatch(self):
         path=urllib.parse.urlsplit(self.path).path
-        if self.command=='GET' and path=='/healthz':return self.reply(200,{'ok':True,'version':'1.9.0'})
+        if self.command=='GET' and path=='/healthz':return self.reply(200,{'ok':True,'version':'1.9.1'})
         if self.command=='GET' and path=='/login':return self.login_redirect()
         # Public assets contain no user data and also style the sign-in/error page.
         if self.command=='GET' and path in ('/resource-types.js','/style.css','/app.js','/explore.js','/discovery.js','/mobile.js'):
@@ -478,6 +480,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path=='/api/file-history':
                 q=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 return self.reply(200,self.app.file_history(q.get('q',[''])[0],q.get('offset',[0])[0]))
+            if path=='/api/acceleration':return self.reply(200,self.app.acceleration_view())
             if path=='/api/state':return self.reply(200,self.app.snapshot())
             if path=='/api/discovery/history':return self.reply(200,{'jobs':self.app.discovery.history()})
             if path=='/api/discovery/job':
@@ -526,6 +529,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as f:f.write(now());f.flush();os.fsync(f.fileno())
             r={'ok':True,'message':'重启已提交，未完成下载将在启动后继续'}
+        elif path=='/api/acceleration':r=self.app.acceleration_save(d)
+        elif path=='/api/acceleration/sync':r=self.app.acceleration_sync()
         elif path=='/api/settings':self.app.settings(d);r={'ok':True}
         else:raise Problem('接口不存在',404)
         self.reply(200,r)
@@ -555,5 +560,6 @@ if __name__=='__main__':
     app=Vault(**config)
     server=http.server.ThreadingHTTPServer(('0.0.0.0',8000),Handler);server.app=app
     threading.Thread(target=app.worker,daemon=True).start()
+    threading.Thread(target=app.acceleration_worker,daemon=True).start()
     print('Nova download vault listening on 8000',flush=True)
     server.serve_forever()

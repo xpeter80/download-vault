@@ -24,3 +24,16 @@ class AdminBridgeTest(unittest.TestCase):
  def test_downloader_restart_only(self):self.assertIn(['/bin/systemctl','restart','aria2.service'],self.exercise('downloader'))
  def test_save_failure_does_not_restart(self):self.assertEqual([],self.exercise('nas',True))
  def test_arbitrary_actions_ignored(self):self.assertEqual([],self.exercise('shell'))
+ def test_options_persist_without_losing_secret(self):
+  with tempfile.TemporaryDirectory() as td:
+   root=Path(td);queue=root/'queue';queue.mkdir();conf=root/'aria.conf';conf.write_text('rpc-secret=test-only\nmax-concurrent-downloads=20\nmax-concurrent-downloads=10\n')
+   (queue/'options.request').write_text(json.dumps({'max-concurrent-downloads':'5','seed-time':'0'}))
+   def mapped(path):return queue if path=='/var/lib/nova-download-vault/admin-control' else conf if path=='/root/.aria2/aria2.conf' else Path(path)
+   with patch('pathlib.Path',side_effect=mapped):runpy.run_path(str(SCRIPT))
+   self.assertEqual(conf.read_text().count('max-concurrent-downloads='),1);self.assertIn('rpc-secret=test-only',conf.read_text());self.assertIn('max-concurrent-downloads=5',conf.read_text());self.assertFalse((queue/'options.request').exists())
+ def test_unknown_options_rejected(self):
+  with tempfile.TemporaryDirectory() as td:
+   queue=Path(td);(queue/'options.request').write_text(json.dumps({'rpc-secret':'untrusted'}))
+   def mapped(path):return queue if path=='/var/lib/nova-download-vault/admin-control' else Path(path)
+   with patch('pathlib.Path',side_effect=mapped):
+    with self.assertRaises(ValueError):runpy.run_path(str(SCRIPT))

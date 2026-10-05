@@ -4,7 +4,7 @@ from pathlib import Path
 
 class Maintenance:
     def maintenance_jobs(self):
-        fields=['gid','dir','files','status']
+        fields=['gid','dir','files','status','bittorrent','infoHash']
         jobs=self.rpc('tellActive',fields);offset=0
         if not isinstance(jobs,list):raise self.problem('下载器任务状态无法确认，操作已保护',503)
         while True:
