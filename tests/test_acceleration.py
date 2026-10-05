@@ -33,3 +33,17 @@ class AccelerationTest(unittest.TestCase):
   self.assertEqual(fetch.call_count,2);self.assertEqual(len(r['trackers']),2);self.assertTrue(r['last_success']);self.assertFalse(r['error'])
  def test_tracker_formats(self):
   self.assertEqual(trackers('javascript:bad\nhttps://a.test/announce\nhttps://a.test/announce'),['https://a.test/announce'])
+ def test_existing_tasks_disable_force_save_without_restarting_unchanged_options(self):
+  calls=[]
+  def rpc(m,*a):
+   calls.append((m,a))
+   if m=='tellActive':return [{'gid':'existing','bittorrent':{'info':{'name':'test'}}}]
+   if m=='tellWaiting':return []
+   if m=='getOption':return dict(DEFAULTS,**{'bt-tracker':''})
+   if m=='getGlobalOption':return dict(DEFAULTS,**{'disk-cache':str(64*1024*1024)})
+   return 'OK'
+  self.app.rpc_override=rpc
+  self.app.acceleration_apply(self.app.acceleration_status())
+  changes=[a[1] for m,a in calls if m=='changeOption']
+  self.assertEqual(changes,[{'force-save':'false'}])
+  self.assertEqual(self.app.acceleration_view()['restart_required'],[])

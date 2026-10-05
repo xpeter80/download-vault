@@ -10,4 +10,4 @@ docker run -d --name nova-download-vault --restart unless-stopped \
   -v /var/lib/nova-download-vault/admin-control:/admin-control \
   -v /var/lib/nova-download-vault/state:/state \
   -v /home/nas3/download/nova-vault:/downloads \
-  nova-download-vault:1.9.1
+  nova-download-vault:1.9.2

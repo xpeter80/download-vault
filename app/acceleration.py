@@ -7,7 +7,7 @@ def serialized(fn):
         with self.acceleration_lock:return fn(self,*args,**kwargs)
     return call
 from pathlib import Path
-DEFAULTS={'max-concurrent-downloads':'5','max-overall-download-limit':'0','max-overall-upload-limit':'50K','seed-time':'0','disk-cache':'64M','bt-max-peers':'100','max-connection-per-server':'8','enable-dht':'true','enable-peer-exchange':'true'}
+DEFAULTS={'force-save':'false','max-concurrent-downloads':'5','max-overall-download-limit':'0','max-overall-upload-limit':'50K','seed-time':'0','disk-cache':'64M','bt-max-peers':'100','max-connection-per-server':'8','enable-dht':'true','enable-peer-exchange':'true'}
 SOURCES=['https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt','https://raw.githubusercontent.com/XIU2/TrackersListCollection/master/best.txt']
 def trackers(text):
     out=[]
@@ -37,15 +37,17 @@ class Acceleration:
         with self.lock:self.db.execute("INSERT OR REPLACE INTO settings VALUES('acceleration',?)",(json.dumps(s),))
     @serialized
     def acceleration_apply(self,s):
-        options=dict(s['options']);all_trackers=list(dict.fromkeys(s.get('trackers',[])+trackers(s.get('custom',''))))
+        options=dict(s['options']);options['force-save']='false';all_trackers=list(dict.fromkeys(s.get('trackers',[])+trackers(s.get('custom',''))))
         options['bt-tracker']=','.join(all_trackers)
         self.rpc('changeGlobalOption',options)
         # Global options affect new tasks; update supported options on existing tasks too.
         supported={k:v for k,v in options.items() if k not in ('disk-cache','enable-dht','max-concurrent-downloads','max-overall-download-limit','max-overall-upload-limit')}
         failures=0
         for j in self.maintenance_jobs():
-            opts={k:v for k,v in supported.items() if k!='bt-tracker'}
-            if j.get('bittorrent'):opts['bt-tracker']=options['bt-tracker']
+            opts={'force-save':'false'}
+            current=self.rpc('getOption',j['gid'])
+            opts.update({k:v for k,v in supported.items() if k not in ('bt-tracker','force-save') and isinstance(current,dict) and current.get(k)!=v})
+            if j.get('bittorrent') and isinstance(current,dict) and current.get('bt-tracker','')!=options['bt-tracker']:opts['bt-tracker']=options['bt-tracker']
             if not j.get('bittorrent'):opts.pop('seed-time',None)
             try:self.rpc('changeOption',j['gid'],opts)
             except Exception:failures+=1

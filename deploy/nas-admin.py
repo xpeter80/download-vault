@@ -18,7 +18,7 @@ path=QUEUE/'options.processing'
 if not path.exists() and request.is_file() and not request.is_symlink():os.replace(str(request),str(path))
 if path.is_file() and not path.is_symlink():
     from tempfile import NamedTemporaryFile
-    allowed={'max-concurrent-downloads','max-overall-download-limit','max-overall-upload-limit','seed-time','disk-cache','bt-max-peers','max-connection-per-server','enable-dht','enable-peer-exchange','bt-tracker'}
+    allowed={'force-save','max-concurrent-downloads','max-overall-download-limit','max-overall-upload-limit','seed-time','disk-cache','bt-max-peers','max-connection-per-server','enable-dht','enable-peer-exchange','bt-tracker'}
     options=json.loads(path.read_text())
     if set(options)-allowed or any(not isinstance(v,str) or '\n' in v or '\r' in v for v in options.values()):raise ValueError('Invalid options')
     conf=Path('/root/.aria2/aria2.conf')

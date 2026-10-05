@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
                 if restored:
                     r=self.rpc('tellStatus',restored['gid'])
                     self.db.execute('UPDATE tasks SET gid=?,status=?,error=? WHERE id=?',(restored['gid'],r['status'],'',t['id']));return
-            options={'gid':t['gid'],'dir':str(self.host_root/self.dirs[t['zone']]/(t.get('folder') or t['date'])/t['id']),'allow-overwrite':'false','auto-file-renaming':'true','seed-time':self.acceleration_status()['options']['seed-time'],'check-certificate':'true'}
+            options={'gid':t['gid'],'dir':str(self.host_root/self.dirs[t['zone']]/(t.get('folder') or t['date'])/t['id']),'force-save':'false','allow-overwrite':'false','auto-file-renaming':'true','seed-time':self.acceleration_status()['options']['seed-time'],'check-certificate':'true'}
             self.rpc('addUri',[t['url']],options)
             self.db.execute("UPDATE tasks SET status='waiting',error='' WHERE id=?",(t['id'],))
         except Problem as e:self.db.execute("UPDATE tasks SET status='submitting',error=? WHERE id=?",(e.message,t['id']))
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
             usage=shutil.disk_usage(self.root)
             tasks=self.rows("SELECT id,name,zone,date,status,error,total,completed,speed,tags FROM tasks WHERE source!='import' ORDER BY created_at DESC LIMIT 1000")
             for t in tasks:t['tags']=json.loads(t['tags'] or '[]')
-            return {'files':fs,'tasks':tasks,'tags':[r['name'] for r in self.rows('SELECT name FROM tags ORDER BY name_key')],'batches':batches,'settings':self.dirs,'rpc_error':self.last_rpc_error,'free':usage.free,'managed_size':sum(f['size'] for f in fs),'version':'1.9.1'}
+            return {'files':fs,'tasks':tasks,'tags':[r['name'] for r in self.rows('SELECT name FROM tags ORDER BY name_key')],'batches':batches,'settings':self.dirs,'rpc_error':self.last_rpc_error,'free':usage.free,'managed_size':sum(f['size'] for f in fs),'version':'1.9.2'}
     def worker(self):
         while not self.stop.is_set():
             try:self.discovery.recover();self.run_ops();self.sync()
@@ -469,7 +469,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.command!='GET' and self.headers.get('Origin')!=self.app.origin:raise Problem('请求来源无效，请从正式入口操作',403)
     def dispatch(self):
         path=urllib.parse.urlsplit(self.path).path
-        if self.command=='GET' and path=='/healthz':return self.reply(200,{'ok':True,'version':'1.9.1'})
+        if self.command=='GET' and path=='/healthz':return self.reply(200,{'ok':True,'version':'1.9.2'})
         if self.command=='GET' and path=='/login':return self.login_redirect()
         # Public assets contain no user data and also style the sign-in/error page.
         if self.command=='GET' and path in ('/resource-types.js','/style.css','/app.js','/explore.js','/discovery.js','/mobile.js'):
