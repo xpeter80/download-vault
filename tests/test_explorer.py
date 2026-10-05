@@ -74,6 +74,7 @@ class ExplorerTest(unittest.TestCase):
   with self.assertRaises(Problem) as caught:self.app.create_task({'url':MAG,'request_key':'new-request-123'})
   self.assertEqual(caught.exception.status,409);self.assertEqual(caught.exception.details['code'],'DUPLICATE_DOWNLOAD')
   def rpc(method,*args):
+   if method in ('tellActive','tellWaiting'):return []
    if method=='tellStatus':raise Problem('not found')
    return 'gid'
   self.app.rpc=rpc

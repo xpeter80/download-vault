@@ -6,8 +6,11 @@ class Maintenance:
     def maintenance_jobs(self):
         fields=['gid','dir','files','status']
         jobs=self.rpc('tellActive',fields);offset=0
+        if not isinstance(jobs,list):raise self.problem('下载器任务状态无法确认，操作已保护',503)
         while True:
-            page=self.rpc('tellWaiting',offset,1000,fields);jobs+=page
+            page=self.rpc('tellWaiting',offset,1000,fields)
+            if not isinstance(page,list):raise self.problem('下载器任务状态无法确认，操作已保护',503)
+            jobs+=page
             if len(page)<1000:return jobs
             offset+=len(page)
             if offset>=10000:raise self.problem('下载任务过多，暂时无法安全检查残留')

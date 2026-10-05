@@ -122,6 +122,32 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
             tags=self.normalize_tags(values);self.save_tag_names(tags)
             self.db.execute('UPDATE files SET tags=? WHERE id=?',(dumps(tags),ident))
             return {'tags':tags}
+    def bulk_file_update(self,d):
+        ids=d.get('file_ids',[]);action=d.get('action','tags')
+        if not isinstance(ids,list) or not ids or len(ids)>10000 or not all(isinstance(x,str) for x in ids):raise Problem('请选择文件，每批最多 10000 个')
+        if action not in ('tags','favorite','unfavorite'):raise Problem('未知批量操作')
+        tags=self.normalize_tags(d.get('tags',[])) if action=='tags' else []
+        if action=='tags' and not tags:raise Problem('请先选择要添加的标签')
+        with self.lock:
+            files=[]
+            for ident in set(ids):
+                f=self.db.execute('SELECT * FROM files WHERE id=?',(ident,)).fetchone()
+                if not f or f['state']!='ready':raise Problem('文件状态已变化，请重新选择',409)
+                if self.db.execute("SELECT 1 FROM ops WHERE file_id=? AND status IN ('queued','intent')",(ident,)).fetchone():raise Problem('文件正在操作，请稍后重试',409)
+                files.append(f)
+            # Validate every merged tag set before writing anything.
+            merged={f['id']:self.normalize_tags(json.loads(f['tags'] or '[]')+tags) for f in files} if action=='tags' else {}
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
+                if action=='tags':
+                    self.save_tag_names(tags)
+                    for f in files:self.db.execute('UPDATE files SET tags=? WHERE id=?',(dumps(merged[f['id']]),f['id']))
+                else:
+                    for f in files:self.db.execute('UPDATE files SET favorite=?,version=version+1 WHERE id=?',(int(action=='favorite'),f['id']))
+                self.db.execute('COMMIT')
+            except Exception:self.db.execute('ROLLBACK');raise
+            return {'count':len(files)}
+
     @staticmethod
     def resource_name(url):
         p=urllib.parse.urlsplit(url or '')
@@ -184,10 +210,23 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
             self.save_tag_names(tags);self.db.execute('UPDATE tasks SET tags=? WHERE id=?',(dumps(tags),ident))
             self.submit(dict(self.db.execute('SELECT * FROM tasks WHERE id=?',(ident,)).fetchone()))
             return dict(self.db.execute('SELECT * FROM tasks WHERE id=?',(ident,)).fetchone())
+    def restored_job(self,t,jobs=None):
+        # Session restore may allocate a new GID. Only exact managed task dirs match.
+        root=str(self.host_root/self.dirs[t['zone']]/(t.get('folder') or t['date'])/t['id'])
+        matches=[j for j in (jobs if jobs is not None else self.maintenance_jobs()) if j.get('dir')==root]
+        payload=[j for j in matches if not self.metadata_only(j)]
+        candidates=payload or matches
+        if len(candidates)==1:return candidates[0]
+        return None
+
     def submit(self,t):
         try:
             try:r=self.rpc('tellStatus',t['gid']);self.db.execute('UPDATE tasks SET status=? WHERE id=?',(r['status'],t['id']));return
-            except Problem:pass
+            except Problem:
+                restored=self.restored_job(t)
+                if restored:
+                    r=self.rpc('tellStatus',restored['gid'])
+                    self.db.execute('UPDATE tasks SET gid=?,status=?,error=? WHERE id=?',(restored['gid'],r['status'],'',t['id']));return
             options={'gid':t['gid'],'dir':str(self.host_root/self.dirs[t['zone']]/(t.get('folder') or t['date'])/t['id']),'allow-overwrite':'false','auto-file-renaming':'true','seed-time':'0','check-certificate':'true'}
             self.rpc('addUri',[t['url']],options)
             self.db.execute("UPDATE tasks SET status='waiting',error='' WHERE id=?",(t['id'],))
@@ -196,13 +235,25 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
         with self.lock:
             try:self.rpc('getVersion');self.last_rpc_error=None
             except Problem as e:self.last_rpc_error=e.message;return
+            restored_jobs=None
             for t in self.rows("SELECT * FROM tasks WHERE status NOT IN ('complete','removed')"):
                 if t['status']=='submitting':self.submit(t);continue
                 try:
-                    r=self.rpc('tellStatus',t['gid'])
+                    try:r=self.rpc('tellStatus',t['gid'])
+                    except Problem:
+                        if restored_jobs is None:restored_jobs=self.maintenance_jobs()
+                        restored=self.restored_job(t,restored_jobs)
+                        if not restored:raise
+                        r=self.rpc('tellStatus',restored['gid'])
+                        self.db.execute('UPDATE tasks SET gid=? WHERE id=?',(restored['gid'],t['id']))
                     followed=r.get('followedBy',[])
                     if followed:
                         self.db.execute('UPDATE tasks SET gid=? WHERE id=?',(followed[0],t['id']));r=self.rpc('tellStatus',followed[0])
+                    name=r.get('bittorrent',{}).get('info',{}).get('name','')
+                    if not name and r.get('files'):
+                        name=Path(r['files'][0].get('path','')).name.removeprefix('[METADATA]')
+                    if name and not t['name']:
+                        self.db.execute('UPDATE tasks SET name=? WHERE id=?',(name,t['id']));t['name']=name
                     state=r['status'];error=''
                     if state=='error':error='下载失败（Aria2 错误码 '+str(r.get('errorCode','?'))+'），可重试；网页链接请换用可下载的文件直链'
                     self.db.execute('UPDATE tasks SET status=?,total=?,completed=?,speed=?,error=? WHERE id=?',(state,int(r.get('totalLength',0)),int(r.get('completedLength',0)),int(r.get('downloadSpeed',0)),error,t['id']))
@@ -365,7 +416,7 @@ CREATE TABLE IF NOT EXISTS ops(id TEXT PRIMARY KEY,batch_id TEXT REFERENCES batc
             usage=shutil.disk_usage(self.root)
             tasks=self.rows("SELECT id,name,zone,date,status,error,total,completed,speed,tags FROM tasks WHERE source!='import' ORDER BY created_at DESC LIMIT 1000")
             for t in tasks:t['tags']=json.loads(t['tags'] or '[]')
-            return {'files':fs,'tasks':tasks,'tags':[r['name'] for r in self.rows('SELECT name FROM tags ORDER BY name_key')],'batches':batches,'settings':self.dirs,'rpc_error':self.last_rpc_error,'free':usage.free,'managed_size':sum(f['size'] for f in fs),'version':'1.8.1'}
+            return {'files':fs,'tasks':tasks,'tags':[r['name'] for r in self.rows('SELECT name FROM tags ORDER BY name_key')],'batches':batches,'settings':self.dirs,'rpc_error':self.last_rpc_error,'free':usage.free,'managed_size':sum(f['size'] for f in fs),'version':'1.9.0'}
     def worker(self):
         while not self.stop.is_set():
             try:self.discovery.recover();self.run_ops();self.sync()
@@ -416,10 +467,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.command!='GET' and self.headers.get('Origin')!=self.app.origin:raise Problem('请求来源无效，请从正式入口操作',403)
     def dispatch(self):
         path=urllib.parse.urlsplit(self.path).path
-        if self.command=='GET' and path=='/healthz':return self.reply(200,{'ok':True,'version':'1.8.1'})
+        if self.command=='GET' and path=='/healthz':return self.reply(200,{'ok':True,'version':'1.9.0'})
         if self.command=='GET' and path=='/login':return self.login_redirect()
         # Public assets contain no user data and also style the sign-in/error page.
-        if self.command=='GET' and path in ('/resource-types.js','/style.css','/app.js','/explore.js','/discovery.js'):
+        if self.command=='GET' and path in ('/resource-types.js','/style.css','/app.js','/explore.js','/discovery.js','/mobile.js'):
             mime='text/css; charset=utf-8' if path.endswith('.css') else 'text/javascript; charset=utf-8'
             return self.reply(200,(BASE/'static'/path[1:]).read_bytes(),mime)
         self.authorize()
@@ -454,6 +505,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path=='/api/explore/history/delete':self.app.explorer.remove(d.get('id'));r={'ok':True}
         elif path=='/api/tasks':r=self.app.create_task(d)
         elif path=='/api/tasks/control':self.app.control(d.get('id'),d.get('action'));r={'ok':True}
+        elif path=='/api/file-tags/bulk':r=self.app.bulk_file_update(d)
         elif path=='/api/file-tags':r=self.app.set_file_tags(d.get('id'),d.get('tags',[]))
         elif path=='/api/favorite':self.app.favorite(d.get('id'),d.get('favorite'));r={'ok':True}
         elif path=='/api/preview':r=self.app.preview(d)
